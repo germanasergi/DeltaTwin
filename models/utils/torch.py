@@ -61,7 +61,7 @@ def load_model_weights(config, ckpt, device):
         in_channel=len(config['DATASET']['bands']),
         out_channels=config['MODEL']['num_classes'],
         activation=config['MODEL']['activation'])
-    
+
     model.load_state_dict(ckpt['model_state'])
     model.to(device)
     model.eval()

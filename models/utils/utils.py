@@ -1,6 +1,7 @@
 import yaml
 from dotenv import load_dotenv
 import os
+import re
 import shutil
 import glob
 from pathlib import Path
@@ -23,6 +24,7 @@ from eopf.common.file_utils import AnyPath
 from eopf.store.convert import convert
 
 from scipy.ndimage import generate_binary_structure, label, binary_fill_holes, binary_erosion
+from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score
 from pyproj import Transformer
 
 
@@ -204,6 +206,40 @@ def download_sentinel_data(df_output, base_dir, access_key, secret_key, endpoint
                     logger.info(f"Cleaned up temporary SAFE: {safe_dir}")
                 except Exception as ce:
                     logger.warning(f"Could not clean temp SAFE {safe_dir}: {ce}")
+
+
+def extract_s2_keys(name):
+    """
+    Extract (datetime, tile_id) from Sentinel-2 product name
+    """
+    dt_match = re.search(r"\d{8}T\d{6}", name)
+    tile_match = re.search(r"T\d{2}[A-Z]{3}", name)
+
+    if dt_match and tile_match:
+        return dt_match.group(), tile_match.group()
+    return None, None
+
+
+def find_gt_png_for_tile(zarr_path, gt_dir):
+    zarr_name = os.path.basename(zarr_path)
+
+    zarr_dt, zarr_tile = extract_s2_keys(zarr_name)
+
+    if zarr_dt is None or zarr_tile is None:
+        raise ValueError(f"Cannot parse keys from {zarr_name}")
+
+    for f in os.listdir(gt_dir):
+        if not f.endswith(".png"):
+            continue
+
+        gt_dt, gt_tile = extract_s2_keys(f)
+
+        if gt_dt == zarr_dt and gt_tile == zarr_tile:
+            return os.path.join(gt_dir, f)
+
+    raise FileNotFoundError(
+        f"No GT PNG found for datetime={zarr_dt}, tile={zarr_tile}"
+    )
 
 
 
@@ -399,7 +435,7 @@ def create_patches_dataframe(zarr_files, bands, bbox, target_res, stride, patch_
 
         # Compute water mask
         water_mask = clean_water_mask(ds, target_res=target_res)
-        buffered_mask = water_mask & ~binary_erosion(water_mask, iterations=300)
+        buffered_mask = water_mask & binary_erosion(water_mask, iterations=200)
         valid_mask = buffered_mask.astype(bool)
         
         # Retrieve shape bands
@@ -444,9 +480,9 @@ def create_patches_dataframe(zarr_files, bands, bbox, target_res, stride, patch_
             for x in range(0, W - patch_size + 1, stride):
                 patch_mask = valid_mask[y:y+patch_size, x:x+patch_size]
 
-                # # Skip patches mostly outside water
-                # if patch_mask.mean() < 0.99:
-                #     continue
+                # Skip patches mostly outside water
+                if patch_mask.mean() < 0.70:
+                    continue
 
                 patch = stack_np[y:y+patch_size, x:x+patch_size, :]
                 if np.isnan(patch).any() or np.isinf(patch).any():
@@ -503,39 +539,6 @@ def export_geotiff_and_vector(zarr_path, prob_map, binary_mask, confidence=None,
     print("Saved:", out_path)
     return out_path
 
-    # # vectorize binary mask
-    # shapes_gen = shapes(binary_mask.astype(np.uint8), transform=transform)
-    # polygons = []
-    # for geom, val in shapes_gen:
-    #     if val == 1:
-    #         polygons.append(shape(geom))
-
-    # gdf = gpd.GeoDataFrame(geometry=polygons, crs=crs)
-    # # Compute mean probability per polygon
-    # mean_vals = []
-    # for geom in polygons:
-    #     # Convert polygon mask to array indices
-    #     mask = features.geometry_mask([geom], 
-    #                                 transform=transform, 
-    #                                 invert=True, 
-    #                                 out_shape=prob_map.shape)
-    #     vals = prob_map[mask]
-    #     mean_vals.append(np.nanmean(vals) if vals.size > 0 else np.nan)
-
-    # gdf["prob_mean"] = mean_vals
-    # gdf.to_file(out_path.replace(".tif", ".geojson"), driver="GeoJSON")
-    # print("Saved vector polygons.")
-
-    # # metadata JSON
-    # meta = {
-    #     "file_source": os.path.basename(zarr_path),
-    #     "coverage_percent": float(100 * binary_mask.mean()),
-    #     "mean_probability": float(np.nanmean(prob_map)),
-    #     "geotiff": os.path.basename(out_path),
-    #     "geojson": os.path.basename(out_path.replace(".tif", ".geojson"))
-    # }
-    # with open(out_path.replace(".tif", ".json"), "w") as f:
-    #     json.dump(meta, f, indent=2)
 
 def crop_tiff_to_bbox(tif_path, bbox, out_path):
     """
@@ -571,3 +574,54 @@ def crop_tiff_to_bbox(tif_path, bbox, out_path):
         dest.write(out_image)
 
     print(f"✅ Cropped image saved to {out_path}")
+
+
+def evaluate_patchwise(
+    df_coords,
+    preds_list,
+    gt_mask,
+    zarr_path,
+    patch_size=256
+):
+    df_tile = df_coords[df_coords["zarr_file"] == zarr_path].reset_index(drop=True)
+
+    y_true_all = []
+    y_pred_all = []
+
+    gt_mucilage_pixel_count = 0
+    gt_total_pixel_count = 0
+    n_patches_used = 0
+
+    for i, row in df_tile.iterrows():
+        y = int(row["y"])
+        x = int(row["x"])
+
+        gt_patch = gt_mask[y:y+patch_size, x:x+patch_size]
+        pred_patch = preds_list[i]
+
+        # Safety checks
+        if gt_patch.shape != pred_patch.shape:
+            continue
+        if gt_patch.size == 0:
+            continue
+
+        y_true_all.append(gt_patch.flatten())
+        y_pred_all.append(pred_patch.flatten())
+
+        gt_mucilage_pixel_count += int(gt_patch.sum())
+        gt_total_pixel_count += gt_patch.size
+        n_patches_used += 1
+
+    y_true = np.concatenate(y_true_all)
+    y_pred = np.concatenate(y_pred_all)
+
+    return {
+        "accuracy": accuracy_score(y_true, y_pred),
+        "precision": precision_score(y_true, y_pred, zero_division=0),
+        "recall": recall_score(y_true, y_pred, zero_division=0),
+        "f1": f1_score(y_true, y_pred, zero_division=0),
+        "n_pixels_evaluated": int(y_true.size),
+        "n_patches_used": n_patches_used,
+        "gt_mucilage_pixels": gt_mucilage_pixel_count,
+        "gt_mucilage_fraction": gt_mucilage_pixel_count / max(gt_total_pixel_count, 1),
+    }

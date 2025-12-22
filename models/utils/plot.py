@@ -148,7 +148,7 @@ def visualize_patch_prediction(patch, probs, pred, save_dir, patch_id="patch"):
     alpha = 0.5
     overlay = np.where(mask[..., None], (1 - alpha) * rgb + alpha * red_mask, rgb)
 
-    # --- Plot ---
+    # Plot
     fig, axes = plt.subplots(1, 3, figsize=(12, 4))
     axes[0].imshow(rgb)
     axes[0].set_title("Input RGB")
@@ -190,56 +190,83 @@ def stitch_predictions(zarr_file, df_coords, probs_list, preds_list, patch_size=
     return avg_prob, binary_mask
 
 
-def visualize_final_panel(zarr_path, avg_prob, binary_mask, df_coords, out_path="results/final_panel.png"):
+def visualize_final_panel(zarr_path, avg_prob, binary_mask, avg_uncert, df_coords, out_path="results/final_panel.png"):
     """
     Create a 3-panel visualization:
       1) RGB
       2) RGB + probability overlay
-      3) RGB + red mask + contour of all analyzed patches
+      3) RGB + red mask + patch contours
+      4) RGB + uncertainty heatmap
     """
-    ds = xr.open_datatree(zarr_path, engine="zarr", mask_and_scale=False, chunks={})
 
-    rgb = get_rgb_from_tile(ds, bands=('b04','b03','b02'), target_res='r10m')
+    # Lazy loading zarr 
+    ds = xr.open_zarr(os.path.join(zarr_path, "measurements/reflectance/r10m"), consolidated=False)
+    b04 = ds["b04"].values
+    b03 = ds["b03"].values
+    b02 = ds["b02"].values
+    rgb = np.stack([b04, b03, b02], axis=-1).astype(np.float32)
+    rgb = rgb.astype(np.float32)
+    rgb = np.clip(rgb / np.percentile(rgb, 98), 0, 1)
+
     prob = np.nan_to_num(avg_prob, 0).astype(np.float32)
+    uncert = np.nan_to_num(avg_uncert, 0).astype(np.float32)
     mask = (binary_mask > 0).astype(np.uint8)
 
-    # Draw patch boundaries
-    patch_outline = np.zeros_like(mask)
-    patch_size = df_coords.iloc[0].get("patch_size", 256)
-    for _, row in df_coords.iterrows():
-        top, left = int(row["y"]), int(row["x"])
-        patch_outline[top:top+patch_size, left] = 1
-        patch_outline[top:top+patch_size, left+patch_size-1] = 1
-        patch_outline[top, left:left+patch_size] = 1
-        patch_outline[top+patch_size-1, left:left+patch_size] = 1
+    # Normalize uncertainty for visualization only
+    uncert_norm = uncert / (np.percentile(uncert, 99) + 1e-8)
+    uncert_norm = np.clip(uncert_norm, 0, 1)
 
-    # --- 1) RGB ---
-    fig, axs = plt.subplots(1, 3, figsize=(18, 8))
-    axs[0].imshow(rgb)
-    axs[0].set_title("RGB Tile")
-    axs[0].axis("off")
+    # # Draw patch boundaries
+    # patch_outline = np.zeros_like(mask)
+    # patch_size = df_coords.iloc[0].get("patch_size", 256)
 
-    # --- 2) RGB + probability heatmap ---
-    prob_color = plt.cm.viridis(prob)[..., :3]
-    rgb_prob = 0.4 * rgb + 0.6 * prob_color
-    rgb_prob[patch_outline > 0] = [0, 0, 0]
-    axs[1].imshow(rgb_prob)
-    axs[1].set_title("Probability Overlay")
-    axs[1].axis("off")
+    # for _, row in df_coords.iterrows():
+    #     top, left = int(row["y"]), int(row["x"])
+    #     patch_outline[top:top+patch_size, left] = 1
+    #     patch_outline[top:top+patch_size, left+patch_size-1] = 1
+    #     patch_outline[top, left:left+patch_size] = 1
+    #     patch_outline[top+patch_size-1, left:left+patch_size] = 1
 
-    # --- 3) RGB + red mask overlay ---
-    overlay = rgb.copy()
-    overlay[mask.astype(bool)] = 0.4 * rgb[mask.astype(bool)] + 0.6 * np.array([1, 0, 0])
+    # fig, axs = plt.subplots(1, 4, figsize=(24, 8))
 
-    overlay[patch_outline > 0] = [0, 0, 0]  # black contour
-    axs[2].imshow(overlay)
-    axs[2].set_title("Mask + Patch Contours")
-    axs[2].axis("off")
+    # # 1) RGB
+    # axs[0].imshow(rgb)
+    # axs[0].set_title("RGB Tile")
+    # axs[0].axis("off")
 
-    plt.tight_layout()
-    plt.savefig(out_path, dpi=200)
-    plt.close()
-    print(f"Saved visualization: {out_path}")
+    # # 2) RGB + probability
+    # axs[1].imshow(rgb)
+    # axs[1].imshow(prob, cmap="viridis", alpha=0.6)
+    # axs[1].set_title("Probability Overlay")
+    # axs[1].axis("off")
+
+    # # 3) RGB + mask
+    # overlay = rgb.copy()
+    # overlay[mask.astype(bool)] = (
+    #     0.4 * rgb[mask.astype(bool)] + 0.6 * np.array([1, 0, 0])
+    # )
+    # overlay[patch_outline > 0] = [0, 0, 0]
+    # axs[2].imshow(overlay)
+    # axs[2].set_title("Mask + Patch Contours")
+    # axs[2].axis("off")
+
+    # # 4) RGB + uncertainty
+    # axs[3].imshow(rgb)
+    # axs[3].imshow(uncert_norm, cmap="magma", alpha=0.6)     
+    # axs[3].set_title("Epistemic Uncertainty")
+    # axs[3].axis("off")
+
+    # plt.tight_layout()
+    # plt.savefig(out_path, dpi=200)
+    # plt.close()
+
+    print(
+        f"Saved visualization: {out_path}\n"
+        f"Uncertainty stats — "
+        f"min: {uncert.min():.4f}, "
+        f"mean: {uncert.mean():.4f}, "
+        f"95%: {np.percentile(uncert, 95):.4f}"
+    )
 
 
 # ---------- Visual helpers ----------
