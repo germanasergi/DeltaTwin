@@ -49,7 +49,7 @@ def main():
     GT_DIR = os.path.join(DATASET_DIR, "mucilage_masks_marmara")
     today = datetime.utcnow().date()
 
-    N_MC = 20
+    N_MC = 100
     eps = 1e-8
 
 
@@ -74,6 +74,8 @@ def main():
     #df_l2a.to_csv(f"{DATASET_DIR}/output_l2a.csv")
 
     logger.info("Starting download process...")
+
+    #df_l2a = df_l2a.drop([0])
 
     download_sentinel_data(
         df_output = df_l2a,
@@ -171,7 +173,7 @@ def main():
 
             mc_probs = np.stack(mc_probs, axis=0)  # [T,H,W]
 
-            # ---- MC STATISTICS ----
+            # MC STATISTICS
             mean_prob = mc_probs.mean(axis=0)
             var_map = mc_probs.var(axis=0)
 
@@ -187,17 +189,16 @@ def main():
             exp_entropy = sample_ent.mean(axis=0)
             mi_map = entropy_map - exp_entropy
 
-            # ---- Binary mask ----
+            # Binary mask
             pred = (mean_prob > 0.5).astype(np.uint8)
 
-            # ---- Collect results ----
+            # Collect results
             all_probs_per_patch.append(mean_prob)
             all_preds_per_patch.append(pred)
             all_uncert["var"].append(var_map)
-            all_uncert["entropy"].append(entropy_map)
             all_uncert["mi"].append(mi_map)
 
-        # ---- Stitch per-tile ----
+        # Stitch per-tile
         avg_prob, binary_mask = stitch_predictions(
             zarr_file=zarr_path,
             df_coords=df_coords,
@@ -214,14 +215,6 @@ def main():
             patch_size=256
         )
 
-        avg_entropy, _ = stitch_predictions(
-            zarr_file=zarr_path,
-            df_coords=df_coords,
-            probs_list=all_uncert["entropy"],
-            preds_list=all_uncert["entropy"],
-            patch_size=256
-        )
-
         avg_mi, _ = stitch_predictions(
             zarr_file=zarr_path,
             df_coords=df_coords,
@@ -230,12 +223,11 @@ def main():
             patch_size=256
         )
 
-        # ---- Sanity print ----
+        # Sanity print
         print(f"Tile: {os.path.basename(zarr_path)}")
         print("  mean prob:", avg_prob.mean())
         print("  max var:", avg_var.max())
         print("  max MI:", avg_mi.max())
-        print("  max entropy:", avg_entropy.max())
 
 
         # # Evaluate masks
