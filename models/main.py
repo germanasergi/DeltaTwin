@@ -56,6 +56,7 @@ def main():
 
     logger.info("Starting download process...")
 
+    df_l2a = df_l2a.drop([1])
     download_sentinel_data(
         df_output = df_l2a,
         base_dir = DATASET_DIR,
@@ -149,7 +150,7 @@ def main():
             all_probs_per_patch.append(probs)
             all_preds_per_patch.append(pred)
 
-        avg_prob, binary_mask = stitch_predictions(
+        avg_prob, binary_mask = stitch_predictions_old(
             zarr_file=zarr_path,
             df_coords=df_coords,
             probs_list=all_probs_per_patch,

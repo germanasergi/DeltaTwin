@@ -168,8 +168,88 @@ def visualize_patch_prediction(patch, probs, pred, save_dir, patch_id="patch"):
 
 
 # ---------- Stitch / aggregation helpers ----------
-def stitch_predictions(zarr_file, df_coords, probs_list, preds_list, patch_size=256):
-    """Rebuild full-tile probability and binary mosaics from patch-level results."""
+def stitch_predictions(zarr_file, df_coords, means_list, vars_list=None, patch_size=256, prob_threshold=0.5):
+    """
+    Rebuild full-tile mosaics from patch-level predictions.
+
+    Parameters
+    ----------
+    zarr_file : str
+        Path to the Zarr tile.
+    df_coords : pd.DataFrame
+        Patch coordinates with columns ['zarr_file', 'x', 'y'].
+    means_list : list[np.ndarray]
+        List of patch-level probability means (H, W).
+    vars_list : list[np.ndarray] or None
+        List of patch-level variances (H, W). If None, uncertainty is not computed.
+    patch_size : int
+        Patch size in pixels.
+    prob_threshold : float
+        Threshold for binary mask generation.
+
+    Returns
+    -------
+    mean_tile : np.ndarray
+        Tile-level mean probability map.
+    std_tile : np.ndarray or None
+        Tile-level uncertainty map (None if vars_list is None).
+    binary_mask : np.ndarray
+        Tile-level binary mask.
+    """
+
+    # Open reference tile for shape
+    ds = xr.open_datatree(zarr_file, engine="zarr", mask_and_scale=False)
+    ref = ds["measurements/reflectance/r10m/b04"]
+    H, W = ref.shape
+
+    # Accumulators
+    mean_sum = np.zeros((H, W), dtype=np.float64)
+    count = np.zeros((H, W), dtype=np.uint16)
+
+    if vars_list is not None:
+        second_moment_sum = np.zeros((H, W), dtype=np.float64)
+
+    # Select patch coordinates for this tile
+    df_coords_zarr = (
+        df_coords[df_coords["zarr_file"] == zarr_file]
+        .reset_index(drop=True)
+    )
+
+    # Stitch patches
+    for i, row in df_coords_zarr.iterrows():
+        top, left = int(row["y"]), int(row["x"])
+        mean_patch = means_list[i]
+        h, w = mean_patch.shape
+
+        mean_sum[top:top+h, left:left+w] += mean_patch
+        count[top:top+h, left:left+w] += 1
+
+        if vars_list is not None:
+            var_patch = vars_list[i]
+            second_moment_sum[top:top+h, left:left+w] += mean_patch**2 + var_patch
+
+    # Compute tile-level mean
+    mean_tile = np.divide(mean_sum, count, where=count > 0)
+
+    # Compute uncertainty if available
+    if vars_list is not None:
+        second_moment_tile = np.divide(
+            second_moment_sum, count, where=count > 0
+        )
+        var_tile = second_moment_tile - mean_tile**2
+        var_tile = np.maximum(var_tile, 0.0)  # numerical safety
+        std_tile = np.sqrt(var_tile)
+    else:
+        std_tile = None
+
+    # Binary mask (always produced)
+    binary_mask = (mean_tile >= prob_threshold).astype(np.uint8)
+
+    return mean_tile, std_tile, binary_mask
+
+
+def stitch_predictions_old(zarr_file, df_coords, probs_list, preds_list, patch_size=256):
+    """Rebuild full-tile probability and binary mosaics from patch-level results - NO STD"""
     ds = xr.open_datatree(zarr_file, engine="zarr", mask_and_scale=False)
     ref = ds["measurements/reflectance/r10m/b04"]
     H, W = ref.shape
@@ -259,14 +339,6 @@ def visualize_final_panel(zarr_path, avg_prob, binary_mask, avg_uncert, df_coord
     # plt.tight_layout()
     # plt.savefig(out_path, dpi=200)
     # plt.close()
-
-    print(
-        f"Saved visualization: {out_path}\n"
-        f"Uncertainty stats — "
-        f"min: {uncert.min():.4f}, "
-        f"mean: {uncert.mean():.4f}, "
-        f"95%: {np.percentile(uncert, 95):.4f}"
-    )
 
 
 # ---------- Visual helpers ----------

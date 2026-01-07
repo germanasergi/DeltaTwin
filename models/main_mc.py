@@ -75,7 +75,7 @@ def main():
 
     logger.info("Starting download process...")
 
-    #df_l2a = df_l2a.drop([0])
+    df_l2a = df_l2a.drop([1])
 
     download_sentinel_data(
         df_output = df_l2a,
@@ -146,9 +146,8 @@ def main():
     tif_paths = []
     
     for zarr_path in unique_zarrs:
-        all_probs_per_patch = []
-        all_preds_per_patch = []
-        all_uncert = {"var": [], "entropy": [], "mi": []}
+        all_means_per_patch = []
+        all_vars_per_patch = []
 
         patches = patches_per_zarr[zarr_path]
 
@@ -174,60 +173,32 @@ def main():
             mc_probs = np.stack(mc_probs, axis=0)  # [T,H,W]
 
             # MC STATISTICS
-            mean_prob = mc_probs.mean(axis=0)
-            var_map = mc_probs.var(axis=0)
-
-            entropy_map = -(
-                mean_prob * np.log(mean_prob + eps) +
-                (1 - mean_prob) * np.log((1 - mean_prob) + eps)
-            )
-
-            sample_ent = -(
-                mc_probs * np.log(mc_probs + eps) +
-                (1 - mc_probs) * np.log((1 - mc_probs) + eps)
-            )
-            exp_entropy = sample_ent.mean(axis=0)
-            mi_map = entropy_map - exp_entropy
-
-            # Binary mask
-            pred = (mean_prob > 0.5).astype(np.uint8)
+            mean_patch = mc_probs.mean(axis=0)
+            var_patch  = mc_probs.var(axis=0, ddof=1)
 
             # Collect results
-            all_probs_per_patch.append(mean_prob)
-            all_preds_per_patch.append(pred)
-            all_uncert["var"].append(var_map)
-            all_uncert["mi"].append(mi_map)
+            all_means_per_patch.append(mean_patch)
+            all_vars_per_patch.append(var_patch)
 
         # Stitch per-tile
-        avg_prob, binary_mask = stitch_predictions(
+        mean_tile, std_tile, binary_mask = stitch_predictions(
             zarr_file=zarr_path,
             df_coords=df_coords,
-            probs_list=all_probs_per_patch,
-            preds_list=all_preds_per_patch,
-            patch_size=256
+            means_list=all_means_per_patch,
+            vars_list=all_vars_per_patch,
+            patch_size=256,
+            prob_threshold=0.7
         )
 
-        avg_var, _ = stitch_predictions(
-            zarr_file=zarr_path,
-            df_coords=df_coords,
-            probs_list=all_uncert["var"],
-            preds_list=all_uncert["var"],
-            patch_size=256
-        )
+        # Tile-level uncertainty indicator (for alarms / reporting)
+        positive_mask = binary_mask == 1
 
-        avg_mi, _ = stitch_predictions(
-            zarr_file=zarr_path,
-            df_coords=df_coords,
-            probs_list=all_uncert["mi"],
-            preds_list=all_uncert["mi"],
-            patch_size=256
-        )
+        if np.any(positive_mask):
+            tile_uncertainty = std_tile[positive_mask].mean()
+        else:
+            tile_uncertainty = 0.0
 
-        # Sanity print
-        print(f"Tile: {os.path.basename(zarr_path)}")
-        print("  mean prob:", avg_prob.mean())
-        print("  max var:", avg_var.max())
-        print("  max MI:", avg_mi.max())
+        print(f"Tile uncertainty: {tile_uncertainty}")
 
 
         # # Evaluate masks
@@ -254,9 +225,9 @@ def main():
 
         tif_path = export_geotiff_and_vector(
             zarr_path=zarr_path,
-            prob_map=avg_prob,
+            prob_map=mean_tile,
             binary_mask=binary_mask,
-            confidence=avg_mi,  
+            confidence = std_tile,
             amei=None,
             out_dir=BASE_DIR
         )
@@ -272,9 +243,9 @@ def main():
 
         visualize_final_panel(
             zarr_path=zarr_path,
-            avg_prob=avg_prob,
+            avg_prob=mean_tile,
             binary_mask=binary_mask,
-            avg_uncert=avg_mi,
+            avg_uncert=std_tile,
             df_coords=df_coords.assign(patch_size=256),
             out_path=os.path.join(output_dir, "final_panel.png")
         )
