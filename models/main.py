@@ -18,7 +18,16 @@ from utils.cdse_utils import *
 from utils.torch import define_model, load_model_weights
 from utils.plot import *
 
-import gradio as gr
+import traceback
+import sys
+
+# Show DeltaTwin logs
+WORKDIR = os.environ.get("DELTA_WORKDIR", "/tmp")
+LOG_FILE = os.path.join(WORKDIR, "flood_detector.log")
+
+# Redirect stdout/stderr to log file (optional, but recommended)
+sys.stdout = open(LOG_FILE, "a", buffering=1)
+sys.stderr = open(LOG_FILE, "a", buffering=1)
 
 
 def main():
@@ -72,6 +81,7 @@ def main():
     logger.info("Extracting patch coordinates...")
     zarr_dir = os.path.join(DATASET_DIR, "target")
     zarr_files = glob.glob(os.path.join(zarr_dir, "*.zarr"))
+    logger.info(f"Zarr files successfully created: {len(zarr_files)}")
 
     if not zarr_files:
         logger.warning(f"No Zarr files found in {zarr_dir}")
@@ -199,4 +209,11 @@ if __name__ == "__main__":
     parser.add_argument("--bbox", type=float, nargs=4, help="Bounding box [minx miny maxx maxy]")
     parser.add_argument("--start_date", type=str, required=False, help="Start date in 'YYYY-MM-DD'. 'today' if current date.")
     parser.add_argument("--end_date", type=str, required=False, help="End date in 'YYYY-MM-DD'. 'today' if current date.")
-    main()
+    try:
+    # Entire main logic here
+        main()  # whatever is in your main()
+    except Exception as e:
+        with open(LOG_FILE, "w") as f:
+            f.write("Exception:\n")
+            traceback.print_exc(file=f)
+        raise 

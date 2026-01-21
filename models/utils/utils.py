@@ -482,11 +482,12 @@ def create_patches_dataframe(zarr_files, bands, bbox, target_res, stride, patch_
 
                 # Skip patches mostly outside water
                 if patch_mask.mean() < 0.70:
+                    print(f"Skipping patch at x={x+x0}, y={y+y0} due to low water coverage ({patch_mask.mean():.2f})")
                     continue
 
                 patch = stack_np[y:y+patch_size, x:x+patch_size, :]
                 if np.isnan(patch).any() or np.isinf(patch).any():
-                    continue
+                    patch = np.nan_to_num(patch, nan=np.nanmean(patch), posinf=1.0, neginf=0.0)
                 patches_per_zarr[zf].append(patch)
 
                 patch_coords.append({

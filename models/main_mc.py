@@ -19,12 +19,18 @@ from utils.torch import define_model, load_model_weights
 from utils.plot import *
 
 from PIL import Image
+import segmentation_models_pytorch as smp
 
 def enable_dropout(model):
     for m in model.modules():
-        if isinstance(m, torch.nn.Dropout):
-            print("Enabling dropout during inference")
+        if isinstance(m, torch.nn.Dropout2d):
             m.train()
+
+def add_decoder_dropout(model, p=0.5):
+    for module in model.decoder.modules():
+        if isinstance(module, smp.base.modules.Conv2dReLU):
+            # Append dropout after the ReLU
+            module.add_module("dropout", nn.Dropout2d(p))
 
 def load_gt_png(gt_path):
     gt = Image.open(gt_path).convert("L")  # grayscale
@@ -75,7 +81,7 @@ def main():
 
     logger.info("Starting download process...")
 
-    df_l2a = df_l2a.drop([1])
+    df_l2a = df_l2a.drop([0])
 
     download_sentinel_data(
         df_output = df_l2a,
@@ -135,6 +141,7 @@ def main():
 
     # Load model
     model = load_model_weights(config, ckpt, device)
+    add_decoder_dropout(model, p=0.5) # added dropout to decoder
 
     # visualize_patch_prediction(patch, probs, pred, save_dir="results", patch_id=f"patch_{i}")
 
@@ -157,7 +164,7 @@ def main():
             patch_tensor = torch.from_numpy(patch).permute(2,0,1).unsqueeze(0).float().to(device)
 
             # Activate Dropout
-            model.train()
+            enable_dropout(model)
 
             mc_probs = []
             with torch.no_grad():
@@ -187,18 +194,21 @@ def main():
             means_list=all_means_per_patch,
             vars_list=all_vars_per_patch,
             patch_size=256,
-            prob_threshold=0.7
+            prob_threshold=0.6
         )
 
         # Tile-level uncertainty indicator (for alarms / reporting)
         positive_mask = binary_mask == 1
+        print("Numer of positive pixels:", np.sum(positive_mask))
 
         if np.any(positive_mask):
-            tile_uncertainty = std_tile[positive_mask].mean()
+            tile_uncertainty_pos = std_tile[positive_mask].mean()
+            tile_uncertainty = std_tile[~positive_mask].mean()
+            print("Mean uncertainty over positive pixels:", tile_uncertainty_pos)
+            print("Mean uncertainty over water pixels:", tile_uncertainty)
         else:
-            tile_uncertainty = 0.0
-
-        print(f"Tile uncertainty: {tile_uncertainty}")
+            tile_uncertainty = std_tile.mean()
+            print(f"Tile uncertainty: {tile_uncertainty}")
 
 
         # # Evaluate masks
@@ -220,35 +230,36 @@ def main():
         #     logger.info(f"{k}: {v}")
 
         #output_dir = os.path.join(DATASET_DIR, "outputs")
-        os.makedirs(OUTPUT_DIR, exist_ok=True)
-        output_dir = OUTPUT_DIR
 
-        tif_path = export_geotiff_and_vector(
-            zarr_path=zarr_path,
-            prob_map=mean_tile,
-            binary_mask=binary_mask,
-            confidence = std_tile,
-            amei=None,
-            out_dir=BASE_DIR
-        )
+        # os.makedirs(OUTPUT_DIR, exist_ok=True)
+        # output_dir = OUTPUT_DIR
 
-        crop_tiff_to_bbox(tif_path, args.bbox, tif_path)
-        tif_paths.append(tif_path)
+        # tif_path = export_geotiff_and_vector(
+        #     zarr_path=zarr_path,
+        #     prob_map=mean_tile,
+        #     binary_mask=binary_mask,
+        #     confidence = std_tile,
+        #     amei=None,
+        #     out_dir=BASE_DIR
+        # )
 
-        # Create ZIP of all TIFs
-        zip_path = os.path.join(BASE_DIR, "mucilage_masks.zip")
-        with zipfile.ZipFile(zip_path, 'w') as zipf:
-            for tif in tif_paths:
-                zipf.write(tif, os.path.basename(tif))
+        # crop_tiff_to_bbox(tif_path, args.bbox, tif_path)
+        # tif_paths.append(tif_path)
 
-        visualize_final_panel(
-            zarr_path=zarr_path,
-            avg_prob=mean_tile,
-            binary_mask=binary_mask,
-            avg_uncert=std_tile,
-            df_coords=df_coords.assign(patch_size=256),
-            out_path=os.path.join(output_dir, "final_panel.png")
-        )
+        # # Create ZIP of all TIFs
+        # zip_path = os.path.join(BASE_DIR, "mucilage_masks.zip")
+        # with zipfile.ZipFile(zip_path, 'w') as zipf:
+        #     for tif in tif_paths:
+        #         zipf.write(tif, os.path.basename(tif))
+
+        # visualize_final_panel(
+        #     zarr_path=zarr_path,
+        #     avg_prob=mean_tile,
+        #     binary_mask=binary_mask,
+        #     avg_uncert=std_tile,
+        #     df_coords=df_coords.assign(patch_size=256),
+        #     out_path=os.path.join(output_dir, "final_panel.png")
+        # )
 
 
 
