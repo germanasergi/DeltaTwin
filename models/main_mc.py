@@ -77,7 +77,6 @@ def main():
 
     # Process and align data
     df_l2a = queries_curation(all_l2a_results)
-    #df_l2a.to_csv(f"{DATASET_DIR}/output_l2a.csv")
 
     logger.info("Starting download process...")
 

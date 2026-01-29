@@ -520,7 +520,7 @@ def export_geotiff_and_vector(zarr_path, prob_map, binary_mask, confidence=None,
     # zarr name
     zarr_name = os.path.basename(zarr_path).replace('.zarr', '')
 
-    out_path = os.path.join(out_dir, f"mucilage_mask_{zarr_name}.tif") # ADAPTED filename
+    out_path = os.path.join(out_dir, f"mucilage_mask.tif") # ADAPTED filename: mucilage_mask_{zarr_name}.tif
     # out_path = os.path.join(out_dir, f"mucilage_mask.tif") old version for unique .tif output
 
     with rasterio.open(

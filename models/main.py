@@ -65,7 +65,7 @@ def main():
 
     logger.info("Starting download process...")
 
-    df_l2a = df_l2a.drop([1])
+    df_l2a = df_l2a.drop([0])
     download_sentinel_data(
         df_output = df_l2a,
         base_dir = DATASET_DIR,
@@ -81,7 +81,6 @@ def main():
     logger.info("Extracting patch coordinates...")
     zarr_dir = os.path.join(DATASET_DIR, "target")
     zarr_files = glob.glob(os.path.join(zarr_dir, "*.zarr"))
-    logger.info(f"Zarr files successfully created: {len(zarr_files)}")
 
     if not zarr_files:
         logger.warning(f"No Zarr files found in {zarr_dir}")
@@ -181,14 +180,14 @@ def main():
             out_dir=BASE_DIR
         )
 
-        crop_tiff_to_bbox(tif_path, args.bbox, tif_path)
+        crop_tiff_to_bbox(tif_path, args.bbox, os.path.join(BASE_DIR, tif_path))
         tif_paths.append(tif_path)
 
-        # Create ZIP of all TIFs
-        zip_path = os.path.join(BASE_DIR, "mucilage_masks.zip")
-        with zipfile.ZipFile(zip_path, 'w') as zipf:
-            for tif in tif_paths:
-                zipf.write(tif, os.path.basename(tif))
+        # # Create ZIP of all TIFs
+        # zip_path = os.path.join(BASE_DIR, "mucilage_masks.zip")
+        # with zipfile.ZipFile(zip_path, 'w') as zipf:
+        #     for tif in tif_paths:
+        #         zipf.write(tif, os.path.basename(tif))
 
         # visualize_final_panel(
         #     zarr_path=zarr_path,

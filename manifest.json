@@ -157,7 +157,7 @@
             "outputs": {
                 "out_segmentation": {
                     "type": "Data",
-                    "glob": "mucilage_masks.zip"
+                    "glob": "mucilage_mask.tif"
                 }
             }
         }

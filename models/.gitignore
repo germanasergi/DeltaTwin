@@ -12,6 +12,7 @@
 
 # Ignore gradio test main
 **/main_gradio.py
+**/main_mc.py
 
 # Ignore csv files
 *.csv
