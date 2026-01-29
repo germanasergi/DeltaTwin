@@ -1,7 +1,7 @@
 # DeltaTwin Mucilage Detection
 
 DestinE DeltaTwin workflow creation/run/publish for mucilage detection using Sentinel-2 products.
-For a detailed explanation on the DeltaTwin, see at: [DeltaTwin Doc](https://deltatwin.destine.eu/docs/introduction)
+For a detailed explanation on the DeltaTwin, see at: [DeltaTwin Doc](https://deltatwin.destine.eu/docs)
 
 ## Table of Contents
 
